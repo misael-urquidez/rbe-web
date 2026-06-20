@@ -30,7 +30,10 @@ python manage.py runserver 0.0.0.0:8000
 Linux:  nmcli device wifi hotspot ifname wlp0s20f3 ssid "RBE-local" password "12345678"
 
 
-
+--script para presentar pantalla de movil
+cd Salvador
+chmod +x auto_scrcpy.sh
+./auto_scrcpy.sh
 
 
 --en dado caso la api de elipse este caida pueden ir a esta pagina

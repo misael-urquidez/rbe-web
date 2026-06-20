@@ -335,6 +335,7 @@
 const CSRF = "{{ csrf_token }}";
 let busy = false;
 let modeloActual = "{{ modelo_default }}";
+let historial = [];
 
 // ── Selector de modelo ──────────────────────────
 document.querySelectorAll('.model-opt').forEach(function(el) {
@@ -361,6 +362,7 @@ function q(txt) {
   enviar();
 }
 function limpiar() {
+  historial = [];
   document.getElementById('messages').innerHTML =
     '<div class="welcome" id="welcome">' +
     '<div class="w-orb">&#9889;</div>' +
@@ -408,6 +410,15 @@ function showTyping() {
 function hideTyping() { var t = document.getElementById('typing'); if (t) t.remove(); }
 
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function plain(html) {
+  var tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  return (tmp.textContent || tmp.innerText || '').replace(/\s+/g, ' ').trim();
+}
+function recordar(role, content) {
+  historial.push({ role: role, content: content.slice(0, 1200) });
+  if (historial.length > 8) historial = historial.slice(-8);
+}
 
 // ── Enviar ──────────────────────────────────────
 async function enviar() {
@@ -415,6 +426,7 @@ async function enviar() {
   var input = document.getElementById('chatInput');
   var txt = input.value.trim();
   if (!txt) return;
+  var contexto = historial.slice(-6);
   input.value = ''; resize(input);
   addMsg('user', esc(txt));
   showTyping();
@@ -425,7 +437,7 @@ async function enviar() {
     var res = await fetch('/elipse/chat/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
-      body: JSON.stringify({ pregunta: txt, modelo: modeloActual })
+      body: JSON.stringify({ pregunta: txt, modelo: modeloActual, historial: contexto })
     });
     var data = await res.json();
     hideTyping();
@@ -433,6 +445,8 @@ async function enviar() {
       addMsg('ai', '<span class="msg-error">&#9888; ' + esc(data.error) + '</span>');
     } else {
       addMsg('ai', data.html);
+      recordar('user', txt);
+      recordar('assistant', plain(data.html));
     }
   } catch(err) {
     hideTyping();

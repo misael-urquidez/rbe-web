@@ -1785,7 +1785,14 @@ def reporte_por_viaje(request, viaje_id):
             return JsonResponse({'error': 'Viaje no encontrado'}, status=404)
 
         viaje_info = info[0]
-        if viaje_info['estado_id'] == 1:  # Disponible = aún no ha ocurrido
+
+        # Bloquear solo si estado Disponible (1) Y la hora de salida aún no ha llegado.
+        # Así los viajes que el historial marca dinámicamente como "Finalizado"
+        # (estado_id==1 en BD pero fecHoraSalida ya pasó) sí pueden mostrar reporte.
+        estado_id  = viaje_info['estado_id']
+        fec_salida = viaje_info.get('fecHoraSalida') or ''
+        ahora_iso  = datetime.now().isoformat()
+        if estado_id == 1 and fec_salida > ahora_iso:
             return JsonResponse({'error': 'Este viaje aún no ha sido realizado'}, status=400)
 
         # Boletos detallados
@@ -1795,7 +1802,7 @@ def reporte_por_viaje(request, viaje_id):
                 CONCAT(pa.paNombre,' ',pa.paPrimerApell,
                        COALESCE(CONCAT(' ',pa.paSegundoApell),''))              AS pasajero,
                 tp.descripcion                                                  AS tipo_pasajero,
-                COALESCE(t.etiqueta_asiento, CAST(a.numero AS CHAR))            AS asiento,
+                COALESCE(NULLIF(t.etiqueta_asiento,''), CONCAT('Asiento ', a.numero)) AS asiento,
                 tpago.nombre                                                    AS metodo_pago,
                 COALESCE(CONCAT(taq.taqNombre,' ',taq.taqPrimerApell),'App')   AS taquillero,
                 t.precio                                                        AS monto

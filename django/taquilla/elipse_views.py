@@ -29,6 +29,7 @@ import json
 import os
 import re
 import urllib.request
+from html import unescape
 from django.shortcuts import render, redirect
 from django.http import JsonResponse
 from django.db import connection
@@ -132,6 +133,9 @@ SYSTEM_PROMPT = (
     "Tu UNICO proposito es ayudar a gestionar la central de autobuses. "
     "Solo respondes preguntas sobre: viajes, rutas, boletos, pasajeros, conductores, "
     "autobuses, terminales, ingresos, taquilleros y estadisticas operativas de RBE. "
+    "Tambien puedes mantener conversacion breve de trabajo con el administrador: saludos, "
+    "recordar su nombre si lo dijo en el historial, y responder seguimientos usando contexto. "
+    "Si preguntan si recuerdas algo, revisa el historial antes de responder; si no esta ahi, dilo claro. "
     "Si preguntan algo fuera de ese contexto, declina amablemente. "
     "Responde en espanol, claro y conciso."
 )
@@ -154,6 +158,11 @@ SQL_SYSTEM_PROMPT = (
     "sea NULL o anterior a DATE_SUB(CURDATE(), INTERVAL X DAY).\n"
     "12. Para viajes de conductor especifico: JOIN viaje v ON c.registro = v.conductor "
     "y filtra por LOWER(CONCAT(c.conNombre,' ',c.conPrimerApell)) LIKE '%nombre%'.\n"
+    "13. Si la pregunta es conversacional, de opinion, saludo, agradecimiento, memoria, identidad "
+    "del usuario o no requiere datos tabulares (ej: 'crees que...', 'que opinas', 'gracias', "
+    "'me recuerdas', 'mi nombre es...', 'soy...'), devuelve NO_SQL.\n"
+    "14. Usa el contexto previo para resolver referencias como 'ese viaje', 'el', 'ella', "
+    "'ese conductor', 'esa ruta' o 'llegara a tiempo'.\n"
     + SCHEMA
 )
 
@@ -264,6 +273,31 @@ def _texto_a_html(text):
 # Extracción de número de viaje / límite top N
 # ─────────────────────────────────────────────────────────
 
+def _limpiar_texto_contexto(text):
+    if not text:
+        return ''
+    text = re.sub(r'<[^>]+>', ' ', str(text))
+    text = unescape(text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:1200]
+
+def _normalizar_historial(historial):
+    if not isinstance(historial, list):
+        return []
+    limpio = []
+    for item in historial[-8:]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get('role')
+        if role == 'ai':
+            role = 'assistant'
+        if role not in ('user', 'assistant'):
+            continue
+        content = _limpiar_texto_contexto(item.get('content', ''))
+        if content:
+            limpio.append({'role': role, 'content': content})
+    return limpio[-6:]
+
 def _extraer_numero_viaje(q):
     """Detecta 'viaje #40', 'viaje numero 40', 'viaje 40', '#40'."""
     patrones = [
@@ -366,6 +400,12 @@ def _intent(q_orig):
         if palabra in q:
             return 'solo_lectura'
 
+    # ── Creador de Elipse ──────────────────────────────────────────────────────
+    if has('quien te creo', 'quien te hizo', 'quien te desarrollo', 'quien te programo',
+           'quien creo elipse', 'quien hizo elipse', 'quien desarrollo elipse',
+           'quien programo elipse', 'tu creador', 'creador de elipse'):
+        return 'creador_elipse'
+
     # ── New #04: qué puede hacer / info de Elipse ───────────────────────────────
     if has('que puedes hacer', 'que puedes', 'para que sirves', 'que haces',
            'que tipo de informacion', 'que informacion', 'ayuda', 'help',
@@ -378,6 +418,14 @@ def _intent(q_orig):
            'sobre rbe', 'historia de rbe', 'empresa rbe', 'muestrame informacion de rbe',
            'informacion rbe'):
         return 'info_rbe'
+
+    # ── Conversacion/memoria: requiere historial, no consulta directa ───────────
+    if (has('me recuerdas', 'recuerdas mi nombre', 'quien soy', 'como me llamo',
+           'mi nombre es', 'me llamo', 'soy ', 'te dire mi nombre', 'te digo mi nombre',
+           'ese ', 'esa ', 'esos ', 'esas ', 'su ', 'sus ', 'anterior', 'mencionado',
+           'dicho ', 'mismo ', 'misma ', 'llegue', 'llegar', 'a tiempo')
+            or re.match(r'^\s*y\b', q)) and not _extraer_numero_viaje(q_orig):
+        return 'ai'
 
     # ── Temporal: ayer / semana / mes ───────────────────────────────────────────
     if has('ayer'):                                    return 'ayer'
@@ -558,20 +606,20 @@ def _intent(q_orig):
 # Llamada a Groq
 # ─────────────────────────────────────────────────────────
 
-def _llamar_groq(system, user_msg, modelo_id, max_tokens=800, temperature=0.1):
+def _llamar_groq(system, user_msg, modelo_id, max_tokens=800, temperature=0.1, historial=None):
     api_key = os.getenv('GROQ_API_KEY', '')
     if not api_key:
         return None, 'No hay API key de Groq configurada.'
 
     url = 'https://api.groq.com/openai/v1/chat/completions'
+    messages = [{'role': 'system', 'content': system}]
+    messages.extend(_normalizar_historial(historial))
+    messages.append({'role': 'user', 'content': user_msg})
     payload = json.dumps({
         'model': modelo_id,
         'max_tokens': max_tokens,
         'temperature': temperature,
-        'messages': [
-            {'role': 'system', 'content': system},
-            {'role': 'user',   'content': user_msg},
-        ]
+        'messages': messages
     }).encode('utf-8')
 
     req = urllib.request.Request(
@@ -597,10 +645,10 @@ def _llamar_groq(system, user_msg, modelo_id, max_tokens=800, temperature=0.1):
 # Modo IA con SQL dinámico (fallback)
 # ─────────────────────────────────────────────────────────
 
-def _ai_con_sql(pregunta, modelo_key):
+def _ai_con_sql(pregunta, modelo_key, historial=None):
     modelo_id = MODELOS_IA.get(modelo_key, MODELOS_IA[MODELO_DEFAULT])['id']
 
-    sql_raw, err = _llamar_groq(SQL_SYSTEM_PROMPT, pregunta, modelo_id, max_tokens=400, temperature=0.0)
+    sql_raw, err = _llamar_groq(SQL_SYSTEM_PROMPT, pregunta, modelo_id, max_tokens=400, temperature=0.0, historial=historial)
     if err:
         return '<p class="msg-error">%s</p>' % err
 
@@ -610,7 +658,7 @@ def _ai_con_sql(pregunta, modelo_key):
     sql_raw = re.sub(r'```$', '', sql_raw).strip()
 
     if sql_raw.upper().startswith('NO_SQL') or not sql_raw.upper().startswith('SELECT'):
-        resp, err2 = _llamar_groq(SYSTEM_PROMPT, pregunta, modelo_id, max_tokens=600, temperature=0.3)
+        resp, err2 = _llamar_groq(SYSTEM_PROMPT, pregunta, modelo_id, max_tokens=600, temperature=0.3, historial=historial)
         if err2:
             return '<p class="msg-error">%s</p>' % err2
         return _texto_a_html(resp)
@@ -618,7 +666,7 @@ def _ai_con_sql(pregunta, modelo_key):
     try:
         cols, rows = _q(sql_raw)
     except Exception as e:
-        resp, _ = _llamar_groq(SYSTEM_PROMPT, pregunta, modelo_id, max_tokens=600, temperature=0.3)
+        resp, _ = _llamar_groq(SYSTEM_PROMPT, pregunta, modelo_id, max_tokens=600, temperature=0.3, historial=historial)
         return (
             '<details style="margin-bottom:8px;font-size:11px;color:var(--muted)">'
             '<summary>SQL generado (con error)</summary>'
@@ -638,7 +686,7 @@ def _ai_con_sql(pregunta, modelo_key):
             SYSTEM_ADMIN,
             'El usuario pregunto: "%s"\nNo encontre ningun resultado. '
             'Responde en UNA oracion corta.' % pregunta,
-            modelo_id, max_tokens=120, temperature=0.1
+            modelo_id, max_tokens=120, temperature=0.1, historial=historial
         )
         tabla_html = '<em>Sin resultados en la base de datos.</em>'
     else:
@@ -650,7 +698,7 @@ def _ai_con_sql(pregunta, modelo_key):
             'El usuario pregunto: "%s"\nDatos reales%s:\n%s\n\n'
             'Responde DIRECTAMENTE usando estos datos. Menciona valores exactos. '
             'No digas que no tienes acceso. No menciones JSON.' % (pregunta, total_str, datos_str),
-            modelo_id, max_tokens=500, temperature=0.2
+            modelo_id, max_tokens=500, temperature=0.2, historial=historial
         )
         tabla_html = _tabla(cols, rows)
 
@@ -723,6 +771,9 @@ def _resolve(intent, pregunta):
             [folio]
         )
         return cols_pago, rows_pago, cols_tickets, rows_tickets
+
+    if intent == 'creador_elipse':
+        return '<p>Me creo <strong>URQUIDEZ ARREDONDO MISAEL</strong>.</p>'
 
     # ── New #18: SQL puro escrito por el usuario ─────────────────────────────────
     if intent == 'sql_puro':
@@ -1798,7 +1849,7 @@ def _resolve(intent, pregunta):
             "SELECT CONCAT(co.nombre,' a ',cd.nombre) AS Ruta,"
             " COUNT(v.numero) AS Viajes, COUNT(t.codigo) AS Boletos"
             " FROM viaje v JOIN ruta r ON v.ruta=r.codigo"
-            " JOIN terminal tor ON r.origen=tor.numero JOIN terminal tdes ON r.destino=tdes.nombre"
+            " JOIN terminal tor ON r.origen=tor.numero JOIN terminal tdes ON r.destino=tdes.numero"
             " JOIN ciudad co ON tor.ciudad=co.clave JOIN ciudad cd ON tdes.ciudad=cd.clave"
             " LEFT JOIN ticket t ON t.viaje=v.numero"
             " WHERE MONTH(v.fecHoraSalida)=%s AND YEAR(v.fecHoraSalida)=%s"
@@ -2083,6 +2134,7 @@ def elipse_chat(request):
         body     = json.loads(request.body)
         pregunta = body.get('pregunta', '').strip()
         modelo_k = body.get('modelo', MODELO_DEFAULT)
+        historial = _normalizar_historial(body.get('historial', []))
 
         if not pregunta:
             return JsonResponse({'error': 'Escribe una pregunta.'})
@@ -2093,7 +2145,7 @@ def elipse_chat(request):
         html   = _resolve(intent, pregunta)
 
         if html is None:
-            html = _ai_con_sql(pregunta, modelo_k)
+            html = _ai_con_sql(pregunta, modelo_k, historial=historial)
 
         return JsonResponse({
             'html':   html,
