@@ -9,6 +9,7 @@ from django.views.decorators.http import require_POST
 from .models import Taquillero, Terminal, Viaje, Pasajero, Pago, Ticket, TipoPago, TipoPasajero, ViajeAsiento, Asiento, CuentaPasajero
 from datetime import date, datetime, timedelta
 import json
+import re
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .serializers import ViajeSerializer, ViajeListSerializer, TerminalSerializer
@@ -475,6 +476,352 @@ def crud_esquema(request, tabla):
                 cur2.execute(f"SELECT `{rc}`, `{display}` FROM `{rt}` LIMIT 1000")
                 opciones[col] = [{'value': r[0], 'label': str(r[1])} for r in cur2.fetchall()]
     return JsonResponse({'columnas': columnas, 'fk_map': fk_map, 'opciones': opciones})
+
+def _ci_get(data, key):
+    key_l = key.lower()
+    for k, v in data.items():
+        if k.lower() == key_l:
+            return v
+    return None
+
+
+def _ci_key(data, key):
+    key_l = key.lower()
+    for k in data.keys():
+        if k.lower() == key_l:
+            return k
+    return key
+
+
+def _clean_text(value):
+    if value is None:
+        return None
+    return str(value).strip()
+
+
+def _is_blank(value):
+    return value is None or str(value).strip() == ''
+
+
+def _field_label(field):
+    aliases = {
+        'numero': 'Número', 'codigo': 'Código', 'clave': 'Clave', 'num': 'Número',
+        'nombre': 'Nombre', 'descripcion': 'Descripción', 'placas': 'Placas',
+        'serievin': 'Serie VIN', 'modelo': 'Modelo', 'marca': 'Marca',
+        'numasientos': 'Número de asientos', 'ano': 'Año', 'capacidad': 'Capacidad',
+        'connombre': 'Nombre', 'conprimerapell': 'Primer apellido', 'consegundoapell': 'Segundo apellido',
+        'licnumero': 'Número de licencia', 'licvencimiento': 'Vencimiento de licencia',
+        'fechacontrato': 'Fecha de contrato', 'panombre': 'Nombre', 'paprimerapell': 'Primer apellido',
+        'pasegundoapell': 'Segundo apellido', 'fechanacimiento': 'Fecha de nacimiento',
+        'duracion': 'Duración', 'origen': 'Origen', 'destino': 'Destino', 'precio': 'Precio',
+        'taqnombre': 'Nombre', 'taqprimerapell': 'Primer apellido', 'taqsegundoapell': 'Segundo apellido',
+        'usuario': 'Usuario', 'contrasena': 'Contraseña', 'terminal': 'Terminal', 'supervisa': 'Supervisa',
+        'dircalle': 'Calle', 'dirnumero': 'Número exterior', 'dircolonia': 'Colonia', 'telefono': 'Teléfono',
+        'ciudad': 'Ciudad', 'fechaemision': 'Fecha de emisión', 'asiento': 'Asiento', 'viaje': 'Viaje',
+        'pasajero': 'Pasajero', 'tipopasajero': 'Tipo de pasajero', 'pago': 'Pago',
+        'tipo': 'Tipo', 'vendedor': 'Vendedor', 'monto': 'Monto', 'descuento': 'Descuento',
+        'fecHoraSalida'.lower(): 'Fecha/hora de salida', 'fecHoraEntrada'.lower(): 'Fecha/hora de llegada',
+        'estado': 'Estado', 'autobus': 'Autobús', 'conductor': 'Conductor', 'ocupado': 'Ocupado',
+        'correo': 'Correo', 'clave': 'Clave', 'proveedor': 'Proveedor', 'firebase_uid': 'Firebase UID',
+        'fecha_nacimiento': 'Fecha de nacimiento', 'pasajero_num': 'Pasajero',
+        'etiqueta_asiento': 'Etiqueta de asiento',
+    }
+    return aliases.get(field.lower(), field)
+
+
+def _parse_date_value(value, label):
+    if _is_blank(value):
+        return None, None
+    try:
+        return date.fromisoformat(str(value)[:10]), None
+    except Exception:
+        return None, f'{label} debe tener formato de fecha válido.'
+
+
+def _parse_datetime_value(value, label):
+    if _is_blank(value):
+        return None, None
+    try:
+        return datetime.fromisoformat(str(value).replace('T', ' ')[:19]), None
+    except Exception:
+        return None, f'{label} debe tener formato de fecha y hora válido.'
+
+
+def _column_meta(tabla):
+    from django.db import connection
+    with connection.cursor() as cur:
+        cur.execute(f"SHOW COLUMNS FROM `{tabla}`")
+        cols = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
+        cur.execute("""
+            SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
+              AND REFERENCED_TABLE_NAME IS NOT NULL
+        """, [tabla])
+        fk_map = {r[0].lower(): (r[1], r[2]) for r in cur.fetchall()}
+    return cols, fk_map
+
+
+def _validate_fk_exists(field, value, fk_map):
+    if _is_blank(value) or field.lower() not in fk_map:
+        return None
+    from django.db import connection
+    ref_table, ref_col = fk_map[field.lower()]
+    with connection.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) FROM `{ref_table}` WHERE `{ref_col}` = %s", [value])
+        if cur.fetchone()[0] == 0:
+            return f'{_field_label(field)} no existe. Selecciona un valor válido.'
+    return None
+
+
+def _validate_unique(tabla, field, value, pk_name=None, pk_value=None):
+    if _is_blank(value):
+        return None
+    from django.db import connection
+    with connection.cursor() as cur:
+        if pk_name:
+            cur.execute(f"SELECT COUNT(*) FROM `{tabla}` WHERE `{field}` = %s AND `{pk_name}` != %s", [value, pk_value])
+        else:
+            cur.execute(f"SELECT COUNT(*) FROM `{tabla}` WHERE `{field}` = %s", [value])
+        if cur.fetchone()[0] > 0:
+            return f'{_field_label(field)} ya está registrado. Usa otro valor.'
+    return None
+
+
+def _validar_crud_data(tabla, data, partial=False, pk_name=None, pk_value=None):
+    cols, fk_map = _column_meta(tabla)
+    today_date = date.today()
+
+    for col in cols:
+        field = col['Field']
+        key = _ci_key(data, field)
+        value = data.get(key)
+        label = _field_label(field)
+        col_type = str(col['Type']).lower()
+        is_pk = col.get('Key') == 'PRI'
+        is_auto = 'auto_increment' in str(col.get('Extra') or '').lower()
+        nullable = col.get('Null') == 'YES'
+
+        if partial and key not in data:
+            continue
+
+        creates_pasajero = tabla == 'cuenta_pasajero' and field.lower() == 'pasajero_num' and not _is_blank(_ci_get(data, 'nombre'))
+        if not partial and not nullable and not is_auto and not creates_pasajero and _is_blank(value):
+            return f'{label} es obligatorio.'
+
+        if _is_blank(value):
+            continue
+
+        value_s = str(value).strip()
+
+        if col_type.startswith(('char', 'varchar')):
+            m = re.search(r'\((\d+)\)', col_type)
+            if m and len(value_s) > int(m.group(1)):
+                return f'{label} no puede exceder {m.group(1)} caracteres.'
+
+        if re.match(r'^(tinyint|smallint|mediumint|int|bigint)', col_type):
+            try:
+                int(value_s)
+            except ValueError:
+                return f'{label} debe ser un número entero.'
+
+        if re.match(r'^(decimal|numeric|float|double|real)', col_type):
+            try:
+                float(value_s)
+            except ValueError:
+                return f'{label} debe ser un número válido.'
+
+        if col_type.startswith('date') and not col_type.startswith('datetime'):
+            _, err = _parse_date_value(value_s, label)
+            if err:
+                return err
+
+        if col_type.startswith(('datetime', 'timestamp')):
+            _, err = _parse_datetime_value(value_s, label)
+            if err:
+                return err
+
+        err = _validate_fk_exists(field, value_s, fk_map)
+        if err:
+            return err
+
+        if col.get('Key') in ('UNI', 'PRI'):
+            err = _validate_unique(tabla, field, value_s, pk_name if partial else None, pk_value)
+            if err:
+                return err
+
+        if is_pk and re.match(r'^(tinyint|smallint|mediumint|int|bigint)', col_type) and int(value_s) <= 0:
+            return f'{label} debe ser mayor a 0.'
+
+    def text(key):
+        return _clean_text(_ci_get(data, key))
+
+    def intval(key):
+        value = text(key)
+        if _is_blank(value):
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    def numval(key):
+        value = text(key)
+        if _is_blank(value):
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
+    name_re = r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ .\-]{2,30}'
+    text_re = r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#/\-]{2,50}'
+
+    for key in ['nombre', 'descripcion', 'conNombre', 'conPrimerApell', 'conSegundoApell', 'paNombre',
+                'paPrimerApell', 'paSegundoApell', 'taqNombre', 'taqPrimerApell', 'taqSegundoApell',
+                'primer_apellido', 'segundo_apellido']:
+        value = text(key)
+        if value and not re.fullmatch(name_re if 'descripcion' not in key.lower() else text_re, value):
+            return f'{_field_label(key)} contiene caracteres inválidos o es demasiado corto.'
+
+    if tabla == 'ciudad':
+        clave = text('clave')
+        if clave and not re.fullmatch(r'[A-ZÁÉÍÓÚÜÑ0-9]{2,5}', clave):
+            return 'La clave de ciudad debe tener de 2 a 5 letras mayúsculas o números.'
+        nombre = text('nombre')
+        if nombre and not re.fullmatch(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ .\-]{3,30}', nombre):
+            return 'El nombre de ciudad debe tener de 3 a 30 letras válidas.'
+
+    if tabla == 'autobus':
+        placas = text('placas')
+        if placas and not re.fullmatch(r'[A-Z0-9\-]{5,10}', placas.upper()):
+            return 'Las placas deben tener de 5 a 10 caracteres: letras, números o guion.'
+        vin = text('serieVIN')
+        if vin and not re.fullmatch(r'[A-HJ-NPR-Z0-9]{17}', vin.upper()):
+            return 'La serie VIN debe tener 17 caracteres válidos; no uses I, O ni Q.'
+
+    if tabla == 'modelo':
+        if intval('numasientos') is not None and not 1 <= intval('numasientos') <= 80:
+            return 'El número de asientos debe estar entre 1 y 80.'
+        if intval('ano') is not None and not 1980 <= intval('ano') <= today_date.year + 1:
+            return f'El año debe estar entre 1980 y {today_date.year + 1}.'
+        if intval('capacidad') is not None and not 1 <= intval('capacidad') <= 100:
+            return 'La capacidad debe estar entre 1 y 100.'
+
+    if tabla == 'conductor':
+        lic = text('licNumero')
+        if lic and not re.fullmatch(r'[A-Z0-9\-]{5,15}', lic.upper()):
+            return 'El número de licencia debe tener de 5 a 15 letras, números o guion.'
+        venc, err = _parse_date_value(text('licVencimiento'), 'Vencimiento de licencia')
+        if err:
+            return err
+        if venc and venc < today_date:
+            return 'La licencia no puede estar vencida.'
+        contrato, err = _parse_date_value(text('fechaContrato'), 'Fecha de contrato')
+        if err:
+            return err
+        if contrato and contrato > today_date:
+            return 'La fecha de contrato no puede ser futura.'
+
+    if tabla == 'pasajero':
+        nac, err = _parse_date_value(text('fechaNacimiento'), 'Fecha de nacimiento')
+        if err:
+            return err
+        if nac and nac >= today_date:
+            return 'La fecha de nacimiento debe ser anterior a hoy.'
+
+    if tabla == 'ruta':
+        if text('origen') and text('destino') and text('origen') == text('destino'):
+            return 'Origen y destino no pueden ser la misma terminal.'
+        duracion = text('duracion')
+        if duracion and not re.fullmatch(r'([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?', duracion):
+            return 'La duración debe tener formato HH:MM o HH:MM:SS.'
+        if numval('precio') is not None and numval('precio') <= 0:
+            return 'El precio debe ser mayor a 0.'
+
+    if tabla == 'taquillero':
+        usuario = text('usuario')
+        if usuario and not re.fullmatch(r'[A-Za-z0-9_.-]{4,20}', usuario):
+            return 'El usuario debe tener de 4 a 20 caracteres: letras, números, punto, guion o guion bajo.'
+        clave = text('contrasena')
+        if not partial and (not clave or len(clave) < 6):
+            return 'La contraseña debe tener al menos 6 caracteres.'
+        if partial and clave and len(clave) < 6:
+            return 'La nueva contraseña debe tener al menos 6 caracteres.'
+        if text('supervisa') and text('supervisa') not in ('0', '1'):
+            return 'Supervisa debe ser 0 o 1.'
+        contrato, err = _parse_date_value(text('fechaContrato'), 'Fecha de contrato')
+        if err:
+            return err
+        if contrato and contrato > today_date:
+            return 'La fecha de contrato no puede ser futura.'
+
+    if tabla == 'terminal':
+        nombre = text('nombre')
+        if nombre and not re.fullmatch(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .\-]{3,30}', nombre):
+            return 'El nombre debe tener de 3 a 30 caracteres y solo usar letras, números, espacios, punto o guion.'
+        calle = text('dirCalle')
+        if calle and not re.fullmatch(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .#\-]{3,30}', calle):
+            return 'La calle debe tener de 3 a 30 caracteres válidos.'
+        dir_numero = text('dirNumero')
+        if dir_numero and not re.fullmatch(r'[A-Za-z0-9\-/# ]{1,10}', dir_numero):
+            return 'El número exterior debe tener máximo 10 caracteres válidos.'
+        colonia = text('dirColonia')
+        if colonia and not re.fullmatch(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .\-]{3,30}', colonia):
+            return 'La colonia debe tener de 3 a 30 caracteres válidos.'
+        telefono = text('telefono')
+        if telefono and not re.fullmatch(r'[0-9]{10,12}', telefono):
+            return 'El teléfono debe contener solo números y tener entre 10 y 12 dígitos.'
+
+    if tabla in ('tipo_pasajero',):
+        descuento = intval('descuento')
+        if descuento is not None and not 0 <= descuento <= 100:
+            return 'El descuento debe estar entre 0 y 100.'
+
+    if tabla in ('pago', 'ticket'):
+        for key in ('monto', 'precio'):
+            value = numval(key)
+            if value is not None and value <= 0:
+                return f'{_field_label(key)} debe ser mayor a 0.'
+
+    if tabla == 'viaje_asiento':
+        ocupado = text('ocupado')
+        if ocupado and ocupado not in ('0', '1'):
+            return 'Ocupado debe ser 0 o 1.'
+
+    if tabla == 'cuenta_pasajero':
+        correo = text('correo')
+        if correo and not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', correo):
+            return 'El correo no tiene un formato válido.'
+        telefono = text('telefono')
+        if telefono and not re.fullmatch(r'[0-9]{10,15}', telefono):
+            return 'El teléfono debe contener solo números y tener entre 10 y 15 dígitos.'
+        proveedor = text('proveedor')
+        if proveedor and not re.fullmatch(r'[A-Za-z0-9_-]{3,50}', proveedor):
+            return 'Proveedor contiene caracteres inválidos.'
+        clave = text('clave')
+        if not partial and (not clave or len(clave) < 6):
+            return 'La contraseña debe tener al menos 6 caracteres.'
+        if partial and clave and len(clave) < 6:
+            return 'La nueva contraseña debe tener al menos 6 caracteres.'
+        nac, err = _parse_date_value(text('fecha_nacimiento'), 'Fecha de nacimiento')
+        if err:
+            return err
+        if nac and nac >= today_date:
+            return 'La fecha de nacimiento debe ser anterior a hoy.'
+        for key in ('nombre', 'primer_apellido'):
+            value = text(key)
+            if key in data and not value:
+                return f'{_field_label(key)} es obligatorio.'
+            if value and not re.fullmatch(name_re, value):
+                return f'{_field_label(key)} contiene caracteres inválidos.'
+
+    return None
+
+
+def _validar_terminal_data(data, partial=False):
+    return _validar_crud_data('terminal', data, partial=partial)
+
 @require_POST
 @admin_requerido
 def crud_insertar(request, tabla):
@@ -486,6 +833,10 @@ def crud_insertar(request, tabla):
     from django.db import transaction
 
     # ── Validaciones previas al INSERT ────────────────────────────────────────
+
+    err = _validar_crud_data(tabla, data)
+    if err:
+        return JsonResponse({'ok': False, 'error': err})
 
     # [CAM-5] Detectar usuario duplicado en taquillero
     if tabla == 'taquillero' and data.get('usuario'):
@@ -629,6 +980,10 @@ def crud_actualizar(request, tabla):
     pk_name  = data.pop('__pk_name__')
     pk_value = data.pop('__pk_value__')
 
+    err = _validar_crud_data(tabla, data, partial=True, pk_name=pk_name, pk_value=pk_value)
+    if err:
+        return JsonResponse({'ok': False, 'error': err})
+
     try:
         from django.db import connection
         with connection.cursor() as cur:
@@ -763,33 +1118,41 @@ def crud_actualizar(request, tabla):
 
 @admin_requerido
 def crud_next_pk(request, tabla):
-    """Devuelve el verdadero MAX(pk)+1 de la tabla y si un ID propuesto está ocupado."""
+    """Devuelve la PK de la tabla y, si es numérica, el siguiente ID disponible."""
     if tabla not in TABLAS_PERMITIDAS:
         return JsonResponse({'error': 'Tabla no permitida'}, status=403)
-    propuesto = request.GET.get('propuesto')  # opcional: verificar si ese ID ya existe
+    propuesto = request.GET.get('propuesto')
     from django.db import connection
     with connection.cursor() as cur:
-        # Obtener la columna PK
         cur.execute(f"SHOW COLUMNS FROM `{tabla}`")
         cols = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
-        pk_col = next((c['Field'] for c in cols if c['Key'] == 'PRI'), None)
-        if not pk_col:
+        pk = next((c for c in cols if c['Key'] == 'PRI'), None)
+        if not pk:
             return JsonResponse({'ok': False, 'error': 'Tabla sin PK definida'})
-        # MAX real
-        cur.execute(f"SELECT MAX(`{pk_col}`) FROM `{tabla}`")
-        row = cur.fetchone()
-        max_val = int(row[0]) if row and row[0] is not None else 0
-        next_id = max_val + 1
-        # ¿El ID propuesto está ocupado?
+
+        pk_col = pk['Field']
+        pk_type = str(pk['Type']).lower()
+        pk_is_numeric = bool(re.match(r'^(tinyint|smallint|mediumint|int|bigint)', pk_type))
+        next_id = None
+
+        if pk_is_numeric:
+            cur.execute(f"SELECT MAX(`{pk_col}`) FROM `{tabla}`")
+            row = cur.fetchone()
+            max_val = int(row[0]) if row and row[0] is not None else 0
+            next_id = max_val + 1
+
         ocupado = False
-        if propuesto is not None:
-            try:
-                pid = int(propuesto)
-                cur.execute(f"SELECT COUNT(*) FROM `{tabla}` WHERE `{pk_col}` = %s", [pid])
-                ocupado = cur.fetchone()[0] > 0
-            except (ValueError, TypeError):
-                pass
-    return JsonResponse({'ok': True, 'pk_col': pk_col, 'next_id': next_id, 'ocupado': ocupado})
+        if propuesto is not None and str(propuesto).strip() != '':
+            cur.execute(f"SELECT COUNT(*) FROM `{tabla}` WHERE `{pk_col}` = %s", [propuesto])
+            ocupado = cur.fetchone()[0] > 0
+
+    return JsonResponse({
+        'ok': True,
+        'pk_col': pk_col,
+        'next_id': next_id,
+        'pk_is_numeric': pk_is_numeric,
+        'ocupado': ocupado,
+    })
 
 @require_POST
 @admin_requerido

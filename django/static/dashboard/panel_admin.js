@@ -1838,14 +1838,200 @@ const COL_ALIAS = {
   'ano': 'año',
   'contrasena': 'contraseña',
   'numasientos': 'num. asientos',
+  'dircalle': 'calle',
+  'dirnumero': 'número exterior',
+  'dircolonia': 'colonia',
   'fechacontrato': 'fecha contrato',
   'fechanacimiento': 'fecha nacimiento',
   'fechapago': 'fecha pago',
   'fechoemision': 'fecha emisión',
+  'fechaemision': 'fecha emisión',
   'tipopasajero': 'tipo pasajero',
   'firebase_uid': 'firebase uid',
+  'taqnombre': 'nombre',
+  'taqprimerapell': 'primer apellido',
+  'taqsegundoapell': 'segundo apellido',
+  'connombre': 'nombre',
+  'conprimerapell': 'primer apellido',
+  'consegundoapell': 'segundo apellido',
+  'panombre': 'nombre',
+  'paprimerapell': 'primer apellido',
+  'pasegundoapell': 'segundo apellido',
 };
 function colLabel(c) { return COL_ALIAS[c.toLowerCase()] ?? c; }
+
+const TABLA_ALIAS = {
+  terminal: 'terminal',
+  ciudad: 'ciudad',
+  taquillero: 'taquillero',
+  conductor: 'conductor',
+  autobus: 'autobús',
+  ruta: 'ruta',
+  viaje: 'viaje',
+  pasajero: 'pasajero',
+  pago: 'pago',
+  ticket: 'ticket',
+  cuenta_pasajero: 'cuenta de pasajero',
+  tipo_pasajero: 'tipo de pasajero',
+  tipo_pago: 'tipo de pago',
+  tipo_asiento: 'tipo de asiento',
+  edo_viaje: 'estado de viaje',
+  viaje_asiento: 'asiento de viaje',
+};
+function tablaLabel(t) { return TABLA_ALIAS[t] ?? t.replaceAll('_', ' '); }
+
+const NAME_PATTERN = '[A-Za-zÁÉÍÓÚÜÑáéíóúüñ .\\-]{2,30}';
+const TEXT_PATTERN = '[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#/\\-]{2,50}';
+const MONEY_RULE = { min: '0.01', step: '0.01', placeholder: 'Mayor a 0', title: 'Captura un importe mayor a 0.' };
+const POS_INT_RULE = { min: '1', step: '1', placeholder: 'Mayor a 0', title: 'Captura un número entero mayor a 0.' };
+
+const CRUD_FIELD_RULES = {
+  marca: {
+    numero: POS_INT_RULE,
+    nombre: { pattern: NAME_PATTERN, placeholder: 'Ej. Mercedes-Benz', title: 'Usa de 2 a 30 letras, espacios, punto o guion.' },
+  },
+  modelo: {
+    numero: POS_INT_RULE,
+    nombre: { pattern: TEXT_PATTERN, placeholder: 'Ej. Irizar i6', title: 'Usa de 2 a 30 caracteres válidos.' },
+    numasientos: { min: '1', max: '80', step: '1', placeholder: '1 a 80', title: 'El número de asientos debe estar entre 1 y 80.' },
+    ano: { min: '1980', max: String(new Date().getFullYear() + 1), step: '1', placeholder: 'Ej. 2024', title: 'Captura un año válido.' },
+    capacidad: { min: '1', max: '100', step: '1', placeholder: '1 a 100', title: 'La capacidad debe estar entre 1 y 100.' },
+    marca: { title: 'Selecciona una marca de la lista.' },
+  },
+  autobus: {
+    numero: POS_INT_RULE,
+    modelo: { title: 'Selecciona un modelo de la lista.' },
+    placas: { pattern: '[A-Za-z0-9\\-]{5,10}', placeholder: 'Ej. ABC-123', title: 'Las placas deben tener de 5 a 10 letras, números o guion.' },
+    serievin: { pattern: '[A-HJ-NPR-Za-hj-npr-z0-9]{17}', placeholder: '17 caracteres', title: 'El VIN debe tener 17 caracteres válidos; no uses I, O ni Q.' },
+  },
+  ciudad: {
+    clave: { pattern: '[A-ZÁÉÍÓÚÜÑ0-9]{2,5}', placeholder: 'Ej. TJ', title: 'Usa de 2 a 5 letras mayúsculas o números.' },
+    nombre: { pattern: '[A-Za-zÁÉÍÓÚÜÑáéíóúüñ .\\-]{3,30}', placeholder: 'Ej. Tijuana', title: 'Usa de 3 a 30 letras válidas.' },
+  },
+  conductor: {
+    registro: POS_INT_RULE,
+    connombre: { pattern: NAME_PATTERN, placeholder: 'Nombre', title: 'Usa de 2 a 30 letras válidas.' },
+    conprimerapell: { pattern: NAME_PATTERN, placeholder: 'Primer apellido', title: 'Usa de 2 a 30 letras válidas.' },
+    consegundoapell: { pattern: NAME_PATTERN, placeholder: 'Segundo apellido', title: 'Usa de 2 a 30 letras válidas.' },
+    licnumero: { pattern: '[A-Za-z0-9\\-]{5,15}', placeholder: 'Ej. BC123456', title: 'La licencia debe tener de 5 a 15 letras, números o guion.' },
+    licvencimiento: { title: 'La licencia no debe estar vencida.' },
+    fechacontrato: { title: 'La fecha de contrato no puede ser futura.' },
+  },
+  ruta: {
+    codigo: POS_INT_RULE,
+    duracion: { pattern: '([01]?\\d|2[0-3]):[0-5]\\d(:[0-5]\\d)?', placeholder: 'HH:MM', title: 'Usa formato HH:MM o HH:MM:SS.' },
+    origen: { title: 'Selecciona terminal de origen.' },
+    destino: { title: 'Selecciona terminal de destino distinta al origen.' },
+    precio: MONEY_RULE,
+  },
+  viaje: {
+    numero: POS_INT_RULE,
+    fechorasalida: { title: 'Captura fecha y hora de salida.' },
+    fechoraentrada: { title: 'Debe ser posterior a la salida.' },
+    ruta: { title: 'Selecciona una ruta.' },
+    estado: { title: 'Selecciona un estado.' },
+    autobus: { title: 'Selecciona un autobús disponible.' },
+    conductor: { title: 'Selecciona un conductor disponible.' },
+  },
+  asiento: {
+    numero: POS_INT_RULE,
+    tipo: { title: 'Selecciona el tipo de asiento.' },
+    autobus: { title: 'Selecciona el autobús.' },
+  },
+  viaje_asiento: {
+    asiento: { title: 'Selecciona el asiento.' },
+    viaje: { title: 'Selecciona el viaje.' },
+    ocupado: { min: '0', max: '1', step: '1', placeholder: '0 o 1', title: 'Usa 0 para libre o 1 para ocupado.' },
+  },
+  taquillero: {
+    registro: POS_INT_RULE,
+    taqnombre: { pattern: NAME_PATTERN, placeholder: 'Nombre', title: 'Usa de 2 a 30 letras válidas.' },
+    taqprimerapell: { pattern: NAME_PATTERN, placeholder: 'Primer apellido', title: 'Usa de 2 a 30 letras válidas.' },
+    taqsegundoapell: { pattern: NAME_PATTERN, placeholder: 'Segundo apellido', title: 'Usa de 2 a 30 letras válidas.' },
+    usuario: { pattern: '[A-Za-z0-9_.\\-]{4,20}', placeholder: '4 a 20 caracteres', title: 'Usa letras, números, punto, guion o guion bajo.' },
+    contrasena: { minlength: '6', title: 'La contraseña debe tener al menos 6 caracteres.' },
+    terminal: { title: 'Selecciona una terminal.' },
+    supervisa: { min: '0', max: '1', step: '1', title: 'Usa 0 o 1.' },
+  },
+  tipo_pasajero: {
+    num: POS_INT_RULE,
+    descuento: { min: '0', max: '100', step: '1', placeholder: '0 a 100', title: 'El descuento debe estar entre 0 y 100.' },
+    descripcion: { pattern: TEXT_PATTERN, placeholder: 'Descripción', title: 'Usa de 2 a 30 caracteres válidos.' },
+  },
+  tipo_pago: {
+    numero: POS_INT_RULE,
+    nombre: { pattern: NAME_PATTERN, placeholder: 'Ej. Efectivo', title: 'Usa de 2 a 30 letras válidas.' },
+    descripcion: { pattern: TEXT_PATTERN, placeholder: 'Descripción', title: 'Usa de 2 a 50 caracteres válidos.' },
+  },
+  edo_viaje: {
+    numero: POS_INT_RULE,
+    nombre: { pattern: NAME_PATTERN, placeholder: 'Ej. Programado', title: 'Usa de 2 a 30 letras válidas.' },
+    descripcion: { pattern: TEXT_PATTERN, placeholder: 'Descripción', title: 'Usa de 2 a 50 caracteres válidos.' },
+  },
+  ticket: {
+    codigo: POS_INT_RULE,
+    precio: MONEY_RULE,
+    fechaemision: { title: 'Captura fecha y hora de emisión.' },
+    asiento: { title: 'Selecciona un asiento.' },
+    viaje: { title: 'Selecciona un viaje.' },
+    pasajero: { title: 'Selecciona un pasajero.' },
+    tipopasajero: { title: 'Selecciona tipo de pasajero.' },
+    pago: { title: 'Selecciona pago.' },
+    etiqueta_asiento: { pattern: '[A-Za-z0-9\\-]{1,10}', placeholder: 'Ej. A1', title: 'Máximo 10 letras, números o guion.' },
+  },
+  pasajero: {
+    num: POS_INT_RULE,
+    panombre: { pattern: NAME_PATTERN, placeholder: 'Nombre', title: 'Usa de 2 a 30 letras válidas.' },
+    paprimerapell: { pattern: NAME_PATTERN, placeholder: 'Primer apellido', title: 'Usa de 2 a 30 letras válidas.' },
+    pasegundoapell: { pattern: NAME_PATTERN, placeholder: 'Segundo apellido', title: 'Usa de 2 a 30 letras válidas.' },
+    fechanacimiento: { title: 'La fecha de nacimiento debe ser anterior a hoy.' },
+  },
+  pago: {
+    numero: POS_INT_RULE,
+    fechapago: { title: 'Captura fecha y hora de pago.' },
+    monto: MONEY_RULE,
+    tipo: { title: 'Selecciona tipo de pago.' },
+    vendedor: { title: 'Selecciona vendedor.' },
+  },
+  terminal: {
+    numero: POS_INT_RULE,
+    nombre: { pattern: '[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .\\-]{3,30}', placeholder: 'Ej. Central Tijuana', title: 'Usa de 3 a 30 caracteres: letras, números, espacios, punto o guion.' },
+    dircalle: { pattern: '[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .#\\-]{3,30}', placeholder: 'Ej. Av. Revolución', title: 'La calle debe tener de 3 a 30 caracteres válidos.' },
+    dirnumero: { pattern: '[A-Za-z0-9\\-/# ]{1,10}', placeholder: 'Ej. 1205', title: 'El número exterior acepta letras, números, espacios, guion, diagonal y #. Máximo 10 caracteres.' },
+    dircolonia: { pattern: '[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .\\-]{3,30}', placeholder: 'Ej. Zona Centro', title: 'La colonia debe tener de 3 a 30 caracteres válidos.' },
+    telefono: { inputmode: 'tel', pattern: '[0-9]{10,12}', placeholder: '10 a 12 dígitos', title: 'Captura solo números, entre 10 y 12 dígitos.' },
+    ciudad: { title: 'Selecciona una ciudad de la lista.' },
+  },
+  tipo_asiento: {
+    codigo: { pattern: '[A-Za-z0-9]{1,5}', placeholder: 'Ej. STD', title: 'Usa de 1 a 5 letras o números.' },
+    descripcion: { pattern: TEXT_PATTERN, placeholder: 'Descripción', title: 'Usa de 2 a 30 caracteres válidos.' },
+  },
+  cuenta_pasajero: {
+    pasajero_num: POS_INT_RULE,
+    correo: { type: 'email', placeholder: 'correo@dominio.com', title: 'Captura un correo válido.' },
+    clave: { minlength: '6', title: 'La contraseña debe tener al menos 6 caracteres.' },
+    proveedor: { pattern: '[A-Za-z0-9_\\-]{3,50}', placeholder: 'email', title: 'Usa letras, números, guion o guion bajo.' },
+    firebase_uid: { pattern: '[A-Za-z0-9_:\\-]{1,128}', placeholder: 'Opcional', title: 'UID válido de Firebase.' },
+    telefono: { inputmode: 'tel', pattern: '[0-9]{10,15}', placeholder: '10 a 15 dígitos', title: 'Captura solo números, entre 10 y 15 dígitos.' },
+    fecha_nacimiento: { title: 'La fecha de nacimiento debe ser anterior a hoy.' },
+    nombre: { pattern: NAME_PATTERN, placeholder: 'Nombre del pasajero', title: 'Usa de 2 a 30 letras válidas.' },
+    primer_apellido: { pattern: NAME_PATTERN, placeholder: 'Primer apellido', title: 'Usa de 2 a 30 letras válidas.' },
+    segundo_apellido: { pattern: NAME_PATTERN, placeholder: 'Segundo apellido opcional', title: 'Usa de 2 a 30 letras válidas.' },
+  },
+};
+
+function fieldRule(tabla, name) {
+  const rules = CRUD_FIELD_RULES[tabla] || {};
+  return rules[name.toLowerCase()] || null;
+}
+
+function attrsFromRule(rule) {
+  if (!rule) return '';
+  return ['pattern', 'min', 'max', 'step', 'inputmode', 'minlength', 'title']
+    .filter(k => rule[k])
+    .map(k => `${k}="${String(rule[k]).replaceAll('\"', '&quot;')}"`)
+    .join(' ');
+}
 
 function setGestionView(view) {
   gestionView = view;
@@ -2096,7 +2282,7 @@ async function abrirInsertar() {
     tablaActual.nextId  = pkInfo.ok ? pkInfo.next_id : 1;
     tablaActual.pkCol   = pkInfo.ok ? pkInfo.pk_col  : null;
 
-    document.getElementById('crud-modal-title').textContent = `Insertar en ${tabla}`;
+    document.getElementById('crud-modal-title').textContent = `Insertar ${tablaLabel(tabla)}`;
     document.getElementById('crud-submit-btn').textContent  = 'Insertar';
 
     // El botón "Modo asistido" no aplica aquí (viaje ya abre directo el asistido)
@@ -2125,7 +2311,7 @@ async function abrirInsertarViajeAvanzado() {
     tablaActual.pkCol   = pkInfo.ok ? pkInfo.pk_col  : null;
     tablaActual.nombre  = tabla;
 
-    document.getElementById('crud-modal-title').textContent = `Insertar en ${tabla}`;
+    document.getElementById('crud-modal-title').textContent = `Insertar ${tablaLabel(tabla)}`;
     document.getElementById('crud-submit-btn').textContent  = 'Insertar';
 
     const btnAs = document.getElementById('crud-btn-asistido');
@@ -2148,7 +2334,7 @@ async function abrirEditar(tabla, pk, pkv) {
   tablaActual.modo     = 'editar';
   tablaActual.pkName   = pk;
   tablaActual.pkValue  = pkv;
-  document.getElementById('crud-modal-title').textContent = `Editar — ${tabla}`;
+  document.getElementById('crud-modal-title').textContent = `Editar ${tablaLabel(tabla)}`;
   document.getElementById('crud-submit-btn').textContent  = 'Guardar';
   renderCrudForm(esq, row);
   abrirModal('modal-crud');
@@ -2196,7 +2382,9 @@ function renderCuentaPasajeroInsertFields(container, vals) {
         data-field="${cfg.field}"
         type="${cfg.type}"
         value="${cfg.value}"
-        placeholder="${cfg.placeholder}" />
+        placeholder="${cfg.placeholder}"
+        ${cfg.field !== 'segundo_apellido' ? 'required' : ''}
+        ${attrsFromRule(fieldRule('cuenta_pasajero', cfg.field))} />
     `;
     container.appendChild(div);
   });
@@ -2361,11 +2549,14 @@ function renderCrudForm(esq, vals) {
       return;
     }
 
+    const rule = fieldRule(tabla, name);
+
     if (esq.fk_map[name]) {
       const opts = esq.opciones[name] || [];
+      const requiredAttr = col.Null === 'NO' && !(isPK && isEditing) ? 'required' : '';
       div.innerHTML = `
         <label>${colLabel(name)}</label>
-        <select data-field="${name}" ${isPK && isEditing ? 'disabled' : ''}>
+        <select data-field="${name}" ${requiredAttr} ${attrsFromRule(rule)} ${isPK && isEditing ? 'disabled' : ''}>
           <option value="">— seleccionar —</option>
           ${opts.map(o => `
             <option value="${o.value}" ${String(o.value) === String(val) ? 'selected' : ''}>
@@ -2380,13 +2571,17 @@ function renderCrudForm(esq, vals) {
       let extraAttrs = '';
       let placeholder = '';
 
+      if (rule?.type) inputType = rule.type;
+
       // Campo contrasena: type=password, nunca mostrar hash, placeholder descriptivo
       if (name === 'contrasena' || name === 'clave') {
         div.innerHTML = `
           <label>${colLabel(name)} ${isEditing ? '<span style="font-size:11px;color:var(--muted)">(dejar vacío para no cambiar)</span>' : ''}</label>
           <input data-field="${name}" type="password" value=""
             placeholder="••••••  ${isEditing ? 'Nueva contraseña (opcional)' : 'Contraseña'}"
-            autocomplete="new-password" />
+            autocomplete="new-password"
+            ${attrsFromRule(fieldRule(tabla, name))}
+            ${isEditing ? '' : 'required'} />
         `;
         c.appendChild(div);
         return;
@@ -2429,6 +2624,16 @@ function renderCrudForm(esq, vals) {
           placeholder = col.Type;
         }
       }
+      if (rule) {
+        extraAttrs = `${extraAttrs} ${attrsFromRule(rule)}`.trim();
+        if (rule.placeholder) placeholder = rule.placeholder;
+        if (rule.type) inputType = rule.type;
+      }
+
+      const requiredAttr = col.Null === 'NO' && !(isPK && isEditing) && !/auto_increment/i.test(col.Extra || '')
+        ? 'required'
+        : '';
+
       if (val) {
         if (inputType === 'datetime-local') {
           val = String(val).replace(' ', 'T').substring(0, 16);
@@ -2444,6 +2649,7 @@ function renderCrudForm(esq, vals) {
           value="${val}"
           placeholder="${placeholder}"
           ${extraAttrs}
+          ${requiredAttr}
           ${readOnly ? 'readonly' : ''}
         />
       `;
@@ -2470,6 +2676,13 @@ function renderCrudForm(esq, vals) {
 
 async function submitCrud() {
   const tabla  = tablaActual.nombre;
+  const formWrap = document.getElementById('crud-form-fields');
+  const firstInvalid = formWrap?.querySelector('[data-field]:invalid');
+  if (firstInvalid) {
+    firstInvalid.reportValidity();
+    firstInvalid.focus();
+    return;
+  }
   const campos = document.querySelectorAll('#crud-form-fields [data-field]');
   const data   = {};
   campos.forEach(el => {
@@ -2492,6 +2705,10 @@ async function submitCrud() {
     if (el.dataset.field === 'foto' && tabla === 'cuenta_pasajero' && window._crudFotoFile) return;
     data[el.dataset.field] = v==='' ? null : v;
   });
+
+  if (tabla === 'ruta' && data.origen && data.destino && String(data.origen) === String(data.destino)) {
+    toast('Origen y destino no pueden ser la misma terminal.', 'err'); return;
+  }
 
   // [CAM-3] Validación de fechas para viaje (frontend)
   if (tabla === 'viaje') {
@@ -2517,6 +2734,10 @@ async function submitCrud() {
       if (pkVal !== '') {
         const chk = await fetch(`/api/crud/${tabla}/next_pk/?propuesto=${encodeURIComponent(pkVal)}`).then(r=>r.json());
         if (chk.ok && chk.ocupado) {
+          if (!chk.pk_is_numeric || chk.next_id === null || chk.next_id === undefined) {
+            toast(`${colLabel(pkCol)} ${pkVal} ya está en uso. Captura otro valor.`, 'err');
+            return;
+          }
           const confirmado = await _dialogoPkOcupado(pkVal, chk.next_id);
           if (!confirmado) return;
           data[pkCol] = chk.next_id;
@@ -2691,7 +2912,7 @@ async function confirmarEliminar() {
 
 function verDetalle(cols, row) {
   const tabla = tablaActual.nombre;
-  document.getElementById('detalle-title').textContent = `Detalle — ${tabla}`;
+  document.getElementById('detalle-title').textContent = `Detalle de ${tablaLabel(tabla)}`;
 
   // ── Para taquillero: enriquecer datos antes de renderizar ─────────────────
   if (tabla === 'taquillero') {
